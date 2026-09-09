@@ -3,11 +3,32 @@ requires = ['setuptools']
 build-backend = 'setuptools.build_meta'
 
 [project]
-name = 'HumanModels'
+name = "hmodel"
 version = '0.0.1'
+requires-python = ">=3.10"
+
+dependencies = [
+    "torch",
+    "torchvision",
+    "roma",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu132" }
+torchvision = { index = "pytorch-cu132" }
+torchaudio = { index = "pytorch-cu132" }
+
+[[tool.uv.index]]
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
+explicit = true
 
 [tool.setuptools.packages.find]
 where = ['src']
+
+[project.optional-dependencies]
+test = ["pytest", "pytest-cov"]
+viz  = ["rerun-sdk"]
 
 [tool.black]
 line-length = 88
@@ -26,3 +47,7 @@ extend-exclude = '''
   | dist
 )/
 '''
+
+[tool.isort]
+profile = "black"
+line_length = 88
