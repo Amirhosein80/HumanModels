@@ -69,8 +69,6 @@ uv run isort src/ tests/    # sort imports (Black profile)
 uv build                    # build sdist + wheel into dist/
 ```
 
-Project conventions, API usage, and contributor rules are documented in [`AGENTS.md`](AGENTS.md).
-
 ## Project layout
 
 ```text
@@ -95,7 +93,7 @@ models/            # SMPL NPZ body models (not shipped in the wheel)
 ## Contributing
 
 1. Create a feature branch and keep changes focused.
-2. Follow the style and performance rules in [`AGENTS.md`](AGENTS.md).
+2. Follow the existing code style (Black + isort, 88-column lines).
 3. Add tests under `tests/` for every public function you touch.
 4. Run `uv run pytest` and `uv run black src/ tests/` before opening a PR.
 

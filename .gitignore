@@ -44,6 +44,10 @@ env/
 # Generated rerun recordings (recreate with examples/visualizer_demo.py)
 *.rrd
 
+# Local agent manual — personal notes, never published
+AGENTS.md
+AGENT_GUIDE.md
+
 # SMPL body models carry their own license and are not redistributed here
 # (see models/README.md for download instructions)
 models/*.npz
