@@ -1,22 +1,65 @@
 [build-system]
-requires = ['setuptools']
-build-backend = 'setuptools.build_meta'
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "hmodel"
-version = '0.0.1'
+version = "0.0.1"
+description = "PyTorch library for human body kinematics, spatial dynamics, SMPL integration, and synthetic IMU synthesis"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
+authors = [{ name = "Amirhossein Feiz" }]
+keywords = [
+    "smpl",
+    "kinematics",
+    "dynamics",
+    "imu",
+    "motion-capture",
+    "pytorch",
+    "body-model",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Physics",
+]
 
 dependencies = [
     "torch",
-    "torchvision",
+    "numpy",
+    "scipy",
+    "trimesh",
+    "rtree",
     "roma",
+]
+
+[project.optional-dependencies]
+test = ["pytest", "pytest-cov"]
+viz = ["rerun-sdk"]
+
+[project.urls]
+Documentation = "https://github.com/amirhossein-feiz/hmodel"
+Source = "https://github.com/amirhossein-feiz/hmodel"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "black",
+    "isort",
+    "pre-commit",
 ]
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu132" }
-torchvision = { index = "pytorch-cu132" }
-torchaudio = { index = "pytorch-cu132" }
 
 [[tool.uv.index]]
 name = "pytorch-cu132"
@@ -24,15 +67,16 @@ url = "https://download.pytorch.org/whl/cu132"
 explicit = true
 
 [tool.setuptools.packages.find]
-where = ['src']
+where = ["src"]
 
-[project.optional-dependencies]
-test = ["pytest", "pytest-cov"]
-viz  = ["rerun-sdk"]
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+cache_dir = ".cache/pytest"
 
 [tool.black]
 line-length = 88
-target-version = ['py313']
+target-version = ["py313"]
 include = '\.pyi?$'
 extend-exclude = '''
 /(

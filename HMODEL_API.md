@@ -21,12 +21,12 @@ uv pip install -e /path/to/HModel[viz]
 pip install -e /path/to/HModel
 ```
 
-**CUDA requirement:** `pyproject.toml` pins `torch` and `torchvision` to the CUDA 13.2
+**CUDA requirement:** `pyproject.toml` pins `torch` to the CUDA 13.2
 wheel index (`https://download.pytorch.org/whl/cu132`). Using `uv` picks this up
 automatically. With plain `pip`, install a matching torch wheel first:
 
 ```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu132
+pip install torch --index-url https://download.pytorch.org/whl/cu132
 pip install -e /path/to/HModel
 ```
 
@@ -48,7 +48,6 @@ After installation the package is importable as `hmodel`.
 | `hmodel.kinematics` | `ForwardKinematics`, `InverseKinematics` for arbitrary trees |
 | `hmodel.feature_ext` | Velocity estimation (SG + causal finite-difference) |
 | `hmodel.syn_imu` | Virtual IMU synthesis from pose sequences |
-| `hmodel.datasets` | TotalCapture real-data loading, AMASS motion prep, IMU calibration |
 | `hmodel.viz` | Rerun-based 3D viewer (requires `pip install hmodel[viz]`) |
 
 ---
