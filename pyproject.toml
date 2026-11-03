@@ -46,8 +46,8 @@ test = ["pytest", "pytest-cov"]
 viz = ["rerun-sdk"]
 
 [project.urls]
-Documentation = "https://github.com/amirhossein-feiz/hmodel"
-Source = "https://github.com/amirhossein-feiz/hmodel"
+Documentation = "https://github.com/Amirhosein80/HumanModels"
+Source = "https://github.com/Amirhosein80/HumanModels"
 
 [dependency-groups]
 dev = [
