@@ -69,7 +69,7 @@ uv run isort src/ tests/    # sort imports (Black profile)
 uv build                    # build sdist + wheel into dist/
 ```
 
-Project conventions for agents and contributors are documented in [`AGENTS.md`](AGENTS.md).
+Project conventions, API usage, and contributor rules are documented in [`AGENTS.md`](AGENTS.md).
 
 ## Project layout
 
