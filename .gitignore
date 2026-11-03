@@ -35,3 +35,11 @@ env/
 .vscode/
 .idea/
 .DS_Store
+
+# Test / linter caches
+.pytest_cache/
+.ruff_cache/
+.cache/
+
+# Generated rerun recordings (recreate with examples/visualizer_demo.py)
+*.rrd
