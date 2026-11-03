@@ -87,6 +87,11 @@ examples/          # runnable demos
 models/            # SMPL NPZ body models (not shipped in the wheel)
 ```
 
+## References
+
+- [articulate](https://github.com/Xinyu-Yi/articulate) — toolkit for articulated
+  body systems, used as a reference for the skeleton/armature abstractions here.
+
 ## Contributing
 
 1. Create a feature branch and keep changes focused.
