@@ -43,3 +43,7 @@ env/
 
 # Generated rerun recordings (recreate with examples/visualizer_demo.py)
 *.rrd
+
+# SMPL body models carry their own license and are not redistributed here
+# (see models/README.md for download instructions)
+models/*.npz
