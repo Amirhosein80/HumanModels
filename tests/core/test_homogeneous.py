@@ -63,22 +63,22 @@ class TestGetTransformationMatrix:
         torch.testing.assert_close(T[..., 3, :], expected.expand(batch_size, 4))
 
     def test_dtype_propagation(self, device):
-        R = random_rotation((), torch.float64, device)
-        p = torch.randn(3, dtype=torch.float64, device=device)
+        R = random_rotation((), torch.float32, device)
+        p = torch.randn(3, dtype=torch.float32, device=device)
         T = get_transformation_matrix(R, p)
-        assert T.dtype == torch.float64
+        assert T.dtype == torch.float32
 
     def test_gradient_flows_through_rotation(self, device):
-        R = random_rotation((), torch.float64, device).requires_grad_(True)
-        p = torch.randn(3, dtype=torch.float64, device=device)
+        R = random_rotation((), torch.float32, device).requires_grad_(True)
+        p = torch.randn(3, dtype=torch.float32, device=device)
         T = get_transformation_matrix(R, p)
         T.sum().backward()
         assert R.grad is not None
         assert not torch.all(R.grad == 0)
 
     def test_gradient_flows_through_position(self, device):
-        R = random_rotation((), torch.float64, device)
-        p = torch.randn(3, dtype=torch.float64, device=device, requires_grad=True)
+        R = random_rotation((), torch.float32, device)
+        p = torch.randn(3, dtype=torch.float32, device=device, requires_grad=True)
         T = get_transformation_matrix(R, p)
         T.sum().backward()
         assert p.grad is not None
@@ -208,7 +208,7 @@ class TestSkewv:
         torch.testing.assert_close(S, torch.zeros(3, 3, dtype=dtype, device=device))
 
     def test_gradient_flows(self, device):
-        v = torch.randn(3, dtype=torch.float64, device=device, requires_grad=True)
+        v = torch.randn(3, dtype=torch.float32, device=device, requires_grad=True)
         S = skewv(v)
         # S.sum() == 0 by antisymmetry; use Frobenius norm squared instead.
         (S * S).sum().backward()

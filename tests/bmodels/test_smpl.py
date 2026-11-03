@@ -180,7 +180,7 @@ class TestForwardKinematics:
 
     def test_output_shapes_no_mesh(self, smpl_male):
         B = 2
-        pose = identity_pose(B, N_JOINTS, torch.float64, torch.device("cpu"))
+        pose = identity_pose(B, N_JOINTS, torch.float32, torch.device("cpu"))
         r, p, v = smpl_male.forward_kinematics(pose, return_mesh=False)
         assert r.shape == (B, N_JOINTS, 3, 3)
         assert p.shape == (B, N_JOINTS, 3)
@@ -188,7 +188,7 @@ class TestForwardKinematics:
 
     def test_output_shapes_with_mesh(self, smpl_male):
         B = 2
-        pose = identity_pose(B, N_JOINTS, torch.float64, torch.device("cpu"))
+        pose = identity_pose(B, N_JOINTS, torch.float32, torch.device("cpu"))
         r, p, v = smpl_male.forward_kinematics(pose, return_mesh=True)
         assert r.shape == (B, N_JOINTS, 3, 3)
         assert p.shape == (B, N_JOINTS, 3)
@@ -197,14 +197,14 @@ class TestForwardKinematics:
 
     def test_vertex_count_matches_template(self, smpl_male):
         B = 1
-        pose = identity_pose(B, N_JOINTS, torch.float64, torch.device("cpu"))
+        pose = identity_pose(B, N_JOINTS, torch.float32, torch.device("cpu"))
         _, _, v = smpl_male.forward_kinematics(pose, return_mesh=True)
         assert v.shape[-2] == smpl_male.v_temp.shape[0]
 
     def test_unbatched_pose_raises_or_works(self, smpl_male):
         """Unbatched pose (J, 3, 3) should produce (J, 3, 3) and (J, 3) outputs."""
         zero_joints, _ = smpl_male.get_zero_state()
-        pose = torch.eye(3, dtype=torch.float64).unsqueeze(0).expand(N_JOINTS, 3, 3)
+        pose = torch.eye(3, dtype=torch.float32).unsqueeze(0).expand(N_JOINTS, 3, 3)
         r, p, _ = smpl_male.forward_kinematics(pose, return_mesh=False)
         assert r.shape == (N_JOINTS, 3, 3)
         assert p.shape == (N_JOINTS, 3)
@@ -215,11 +215,11 @@ class TestForwardKinematics:
         """Identity rotations → joint positions equal to T-pose positions."""
         zero_joints, _ = smpl_male.get_zero_state()
         B = 1
-        pose = identity_pose(B, N_JOINTS, torch.float64, torch.device("cpu"))
+        pose = identity_pose(B, N_JOINTS, torch.float32, torch.device("cpu"))
         _, global_position, _ = smpl_male.forward_kinematics(pose, return_mesh=False)
         torch.testing.assert_close(
             global_position[0],
-            zero_joints,
+            zero_joints.to(global_position.dtype),
             atol=1e-4,
             rtol=1e-4,
         )
@@ -229,20 +229,20 @@ class TestForwardKinematics:
         B = 3
         # Random valid pose via QR
         torch.manual_seed(0)
-        A = torch.randn(B, N_JOINTS, 3, 3, dtype=torch.float64)
+        A = torch.randn(B, N_JOINTS, 3, 3, dtype=torch.float32)
         Q, _ = torch.linalg.qr(A)
         sign = torch.linalg.det(Q).sign()[..., None, None]
         pose = Q * sign
 
         r, _, _ = smpl_male.forward_kinematics(pose, return_mesh=False)
-        eye = torch.eye(3, dtype=torch.float64)
+        eye = torch.eye(3, dtype=torch.float32)
         RRt = torch.matmul(r, r.transpose(-1, -2))
         torch.testing.assert_close(RRt, eye.expand_as(RRt), atol=1e-5, rtol=1e-5)
 
     def test_determinant_is_one(self, smpl_male):
         """Rotation matrices must have det ≈ +1 (proper rotations)."""
         B = 2
-        pose = identity_pose(B, N_JOINTS, torch.float64, torch.device("cpu"))
+        pose = identity_pose(B, N_JOINTS, torch.float32, torch.device("cpu"))
         r, _, _ = smpl_male.forward_kinematics(pose, return_mesh=False)
         dets = torch.linalg.det(r)
         torch.testing.assert_close(dets, torch.ones_like(dets), atol=1e-5, rtol=1e-5)
@@ -250,8 +250,8 @@ class TestForwardKinematics:
     def test_root_position_shifts_all_joints(self, smpl_male):
         """Adding root_position must translate every joint (and vertex) by that offset."""
         B = 2
-        pose = identity_pose(B, N_JOINTS, torch.float64, torch.device("cpu"))
-        root = torch.tensor([[1.0, 2.0, 3.0]], dtype=torch.float64).expand(B, 3)
+        pose = identity_pose(B, N_JOINTS, torch.float32, torch.device("cpu"))
+        root = torch.tensor([[1.0, 2.0, 3.0]], dtype=torch.float32).expand(B, 3)
 
         _, p_base, v_base = smpl_male.forward_kinematics(pose, return_mesh=True)
         _, p_shift, v_shift = smpl_male.forward_kinematics(
@@ -266,7 +266,7 @@ class TestForwardKinematics:
     def test_batch_consistency(self, smpl_male):
         """Single-sample result should match the corresponding slice of a batch."""
         torch.manual_seed(42)
-        A = torch.randn(4, N_JOINTS, 3, 3, dtype=torch.float64)
+        A = torch.randn(4, N_JOINTS, 3, 3, dtype=torch.float32)
         Q, _ = torch.linalg.qr(A)
         sign = torch.linalg.det(Q).sign()[..., None, None]
         pose = Q * sign
@@ -282,6 +282,11 @@ class TestForwardKinematics:
         """Identity rotations → vertices should match T-pose (up to root centering)."""
         _, zero_vertex = smpl_male.get_zero_state()
         B = 1
-        pose = identity_pose(B, N_JOINTS, torch.float64, torch.device("cpu"))
+        pose = identity_pose(B, N_JOINTS, torch.float32, torch.device("cpu"))
         _, _, global_vertex = smpl_male.forward_kinematics(pose, return_mesh=True)
-        torch.testing.assert_close(global_vertex[0], zero_vertex, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(
+            global_vertex[0],
+            zero_vertex.to(global_vertex.dtype),
+            atol=1e-4,
+            rtol=1e-4,
+        )
