@@ -40,6 +40,9 @@ env/
 .pytest_cache/
 .ruff_cache/
 .cache/
+.coverage
+.coverage.*
+htmlcov/
 
 # Generated rerun recordings (recreate with examples/visualizer_demo.py)
 *.rrd

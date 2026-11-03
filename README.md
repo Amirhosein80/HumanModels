@@ -18,8 +18,8 @@ The project is managed with [uv](https://docs.astral.sh/uv/). PyTorch is resolve
 CUDA 13.2 wheel index automatically.
 
 ```bash
-git clone https://github.com/amirhossein-feiz/hmodel
-cd hmodel
+git clone https://github.com/Amirhosein80/HumanModels.git
+cd HumanModels
 uv sync                      # runtime + dev dependencies
 uv sync --extra viz          # + rerun 3D viewer
 ```
