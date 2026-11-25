@@ -156,14 +156,34 @@ class SynIMU:
         T = pose.shape[0]
         dtype, device = pose.dtype, pose.device
 
-        all_grot, all_joint, all_vertex = self.smpl.forward_kinematics(
-            pose=pose, root_position=translation, return_mesh=True
+        # Forward kinematics without the full 6890-vertex mesh — we only need
+        # the 6 sensor surface vertices, computed via LBS on their subset.
+        all_grot, all_joint, _ = self.smpl.forward_kinematics(
+            pose=pose, root_position=translation, return_mesh=False
         )
+        all_grot_out = all_grot  # keep ref for output "Grot"
 
         grot = all_grot[:, _JOINT_MASK].clone()  # (T, 6, 3, 3)
-        vertex = all_vertex[:, _VERTEX_MASK].clone()  # (T, 6, 3)
-        all_grot_out = all_grot  # keep ref before del
-        del all_vertex  # free (T, V, 3) — largest allocation
+
+        # ---- LBS on the 6 selected vertices only (not the full mesh) ----
+        zero_joints, zero_vertex = self.smpl.get_zero_state()
+        zero_joints = zero_joints.to(dtype=dtype, device=device)  # (J, 3)
+        zero_vertex = zero_vertex.to(dtype=dtype, device=device)  # (V, 3)
+        weights = self.smpl.skinning_weights.to(dtype=dtype, device=device)  # (V, J)
+
+        # G_j = [R_global_j | p_global_j - R_global_j @ zero_joints[j]; 0|1]
+        rot_part = all_grot  # (T, J, 3, 3)
+        t_part = all_joint - torch.matmul(all_grot, zero_joints.unsqueeze(-1)).squeeze(
+            -1
+        )  # (T, J, 3)
+
+        w_sub = weights[_VERTEX_MASK]  # (6, J)
+        v_sub = zero_vertex[_VERTEX_MASK]  # (6, 3)
+
+        rot_v = torch.einsum("tjik,vj->tvik", rot_part, w_sub)  # (T, 6, 3, 3)
+        trans_v = torch.einsum("tji,vj->tvi", t_part, w_sub)  # (T, 6, 3)
+        vertex = torch.einsum("tvik,vk->tvi", rot_v, v_sub) + trans_v  # (T, 6, 3)
+        del rot_v, trans_v, rot_part, t_part, w_sub, v_sub
 
         if add_noise:
             import math as _math
