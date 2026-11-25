@@ -5,7 +5,13 @@ import math
 import pytest
 import torch
 
-from hmodel.core.dynamics import spatial_inertia
+from hmodel.core.dynamics import (
+    force_cross,
+    force_cross_apply,
+    motion_cross,
+    motion_cross_apply,
+    spatial_inertia,
+)
 from hmodel.core.jacobian import body_jacobian, motion_subspace
 from hmodel.dynamics import contact_jacobian, crba, rnea
 
@@ -325,3 +331,60 @@ class TestContactJacobian:
         Jac = body_jacobian(E, r, parents, S)  # (J, 6, J*3)
         Jc = contact_jacobian(Jac, [1, 3])
         assert Jc.shape == (3 * n_c, J * n_f)
+
+
+# ── matrix-free cross products ─────────────────────────────────────────────
+
+
+class TestMatrixFreeCrossProducts:
+    """Verify motion_cross_apply / force_cross_apply match the 6x6 matrices."""
+
+    def test_motion_cross_apply_matches_matrix(self):
+        dtype = torch.float64
+        J = 4
+        parents, E, r, S = _chain(J, dtype=dtype)
+        v = torch.randn(J, 6, dtype=dtype)
+        u = torch.randn(J, 6, dtype=dtype)
+
+        mat = torch.stack([motion_cross(v[i]) @ u[i] for i in range(J)])
+        free = motion_cross_apply(v, u)
+        torch.testing.assert_close(mat, free, atol=1e-10, rtol=0.0)
+
+    def test_force_cross_apply_matches_matrix(self):
+        dtype = torch.float64
+        J = 4
+        parents, E, r, S = _chain(J, dtype=dtype)
+        v = torch.randn(J, 6, dtype=dtype)
+        f = torch.randn(J, 6, dtype=dtype)
+
+        mat = torch.stack([force_cross(v[i]) @ f[i] for i in range(J)])
+        free = force_cross_apply(v, f)
+        torch.testing.assert_close(mat, free, atol=1e-10, rtol=0.0)
+
+    def test_motion_cross_apply_batched(self):
+        dtype = torch.float32
+        B, J = 3, 4
+        parents, E, r, S = _chain(J, dtype=dtype)
+        E_b = E.unsqueeze(0).expand(B, J, 3, 3).clone()
+        r_b = r.unsqueeze(0).expand(B, J, 3).clone()
+        v = torch.randn(B, J, 6, dtype=dtype)
+        u = torch.randn(B, J, 6, dtype=dtype)
+
+        mat = torch.stack(
+            [motion_cross(v[b, j]) @ u[b, j] for b in range(B) for j in range(J)]
+        ).reshape(B, J, 6)
+        free = motion_cross_apply(v, u)
+        torch.testing.assert_close(mat, free, atol=1e-5, rtol=1e-5)
+
+    def test_force_cross_apply_batched(self):
+        dtype = torch.float32
+        B, J = 3, 4
+        parents, E, r, S = _chain(J, dtype=dtype)
+        v = torch.randn(B, J, 6, dtype=dtype)
+        f = torch.randn(B, J, 6, dtype=dtype)
+
+        mat = torch.stack(
+            [force_cross(v[b, j]) @ f[b, j] for b in range(B) for j in range(J)]
+        ).reshape(B, J, 6)
+        free = force_cross_apply(v, f)
+        torch.testing.assert_close(mat, free, atol=1e-5, rtol=1e-5)
