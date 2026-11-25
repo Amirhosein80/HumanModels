@@ -88,14 +88,14 @@ def _make_checkerboard(
 
 
 def _vertex_normals(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
-    """Compute per-vertex normals by accumulating face normals."""
+    """Compute per-vertex normals by accumulating face normals (vectorised)."""
     v0 = vertices[faces[:, 0]]
     v1 = vertices[faces[:, 1]]
     v2 = vertices[faces[:, 2]]
     fn = np.cross(v1 - v0, v2 - v0)
     vn = np.zeros_like(vertices)
-    for i in range(3):
-        np.add.at(vn, faces[:, i], fn)
+    # faces.reshape(-1) = [f0,f1,f2, f0,f1,f2, ...]; fn.repeat(3) matches per-vertex
+    np.add.at(vn, faces.reshape(-1), np.repeat(fn, 3, axis=0))
     norms = np.linalg.norm(vn, axis=1, keepdims=True)
     norms = np.where(norms < 1e-8, 1.0, norms)
     return (vn / norms).astype(np.float32)
@@ -151,6 +151,26 @@ class SMPLVisualizer:
         # Foot-level Y from T-pose (SMPL: Y is up)
         zero_joints, _ = smpl.get_zero_state()
         self._floor_y = float(zero_joints[:, 1].min().item()) - 0.02
+
+        # Pre-compute constant colour / radius arrays so they are not
+        # recreated on every logged frame.
+        self._joint_radii = np.where(np.arange(N_JOINTS) == 0, 0.038, 0.022).astype(
+            np.float32
+        )
+        self._joint_colors = np.array(
+            [
+                _to_rgba8(_C_ROOT) if j == 0 else _to_rgba8(_C_JOINT)
+                for j in range(N_JOINTS)
+            ],
+            dtype=np.uint8,
+        )
+        self._bone_colors = np.array(
+            [_to_rgba8(_C_BONE)] * len(self._edges), dtype=np.uint8
+        )
+        # Body colour tiled to the vertex count (constant for a given model).
+        self._body_color_rgba = np.tile(
+            _to_rgba8(_C_BODY), (len(smpl.v_temp), 1)
+        ).astype(np.uint8)
 
         # Initialise rerun; spawn=True opens the native desktop viewer
         rr.init(recording_id, spawn=True)
@@ -385,9 +405,8 @@ class SMPLVisualizer:
     ) -> None:
         if self._show_mesh and vertices is not None:
             vn = _vertex_normals(vertices, self._faces)
-            body_color = np.tile(_to_rgba8(_C_BODY), (len(vertices), 1)).astype(
-                np.uint8
-            )
+            # Use cached body colour (vertex count is constant for a model).
+            body_color = self._body_color_rgba[: len(vertices)]
             rr.log(
                 "world/body/mesh",
                 rr.Mesh3D(
@@ -399,17 +418,13 @@ class SMPLVisualizer:
             )
 
         if self._show_skeleton:
-            radii = np.where(np.arange(N_JOINTS) == 0, 0.038, 0.022).astype(np.float32)
-            joint_colors = np.array(
-                [
-                    _to_rgba8(_C_ROOT) if j == 0 else _to_rgba8(_C_JOINT)
-                    for j in range(N_JOINTS)
-                ],
-                dtype=np.uint8,
-            )
             rr.log(
                 "world/skeleton/joints",
-                rr.Points3D(joints, radii=radii, colors=joint_colors),
+                rr.Points3D(
+                    joints,
+                    radii=self._joint_radii,
+                    colors=self._joint_colors,
+                ),
             )
 
             bone_strips = [[joints[p], joints[c]] for p, c in self._edges]
@@ -417,7 +432,7 @@ class SMPLVisualizer:
                 "world/skeleton/bones",
                 rr.LineStrips3D(
                     bone_strips,
-                    colors=[_to_rgba8(_C_BONE)] * len(bone_strips),
+                    colors=self._bone_colors,
                     radii=0.010,
                 ),
             )
