@@ -103,3 +103,58 @@ def force_cross(v: torch.Tensor) -> torch.Tensor:
         (..., 6, 6) force cross-product matrix.
     """
     return -motion_cross(v).transpose(-1, -2)
+
+
+# ── Matrix-free spatial cross-product applications ─────────────────────────
+
+
+def motion_cross_apply(v: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
+    """Compute ``motion_cross(v) @ u`` without building the 6×6 matrix.
+
+    For v = [ω; v_lin] and u = [u_ang; u_lin]:
+
+        v× u = [ω × u_ang;
+                v_lin × u_ang + ω × u_lin]
+
+    Args:
+        v: (..., 6) spatial velocity.
+        u: (..., 6) spatial vector.
+
+    Returns:
+        (..., 6) result of v× u.
+    """
+    omega = v[..., :3]
+    vlin = v[..., 3:]
+    u_ang = u[..., :3]
+    u_lin = u[..., 3:]
+    top = torch.linalg.cross(omega, u_ang, dim=-1)
+    bot = torch.linalg.cross(vlin, u_ang, dim=-1) + torch.linalg.cross(
+        omega, u_lin, dim=-1
+    )
+    return torch.cat([top, bot], dim=-1)
+
+
+def force_cross_apply(v: torch.Tensor, f: torch.Tensor) -> torch.Tensor:
+    """Compute ``force_cross(v) @ f`` without building the 6×6 matrix.
+
+    For v = [ω; v_lin] and f = [f_top; f_bot]:
+
+        v×* f = [ω × f_top + v_lin × f_bot;
+                 ω × f_bot]
+
+    Args:
+        v: (..., 6) spatial velocity.
+        f: (..., 6) spatial force.
+
+    Returns:
+        (..., 6) result of v×* f.
+    """
+    omega = v[..., :3]
+    vlin = v[..., 3:]
+    f_top = f[..., :3]
+    f_bot = f[..., 3:]
+    top = torch.linalg.cross(omega, f_top, dim=-1) + torch.linalg.cross(
+        vlin, f_bot, dim=-1
+    )
+    bot = torch.linalg.cross(omega, f_bot, dim=-1)
+    return torch.cat([top, bot], dim=-1)

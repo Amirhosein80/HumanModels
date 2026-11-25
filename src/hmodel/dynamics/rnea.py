@@ -1,6 +1,9 @@
 import torch
 
-from ..core.dynamics import force_cross, motion_cross
+from ..core.dynamics import (
+    force_cross_apply,
+    motion_cross_apply,
+)
 from ..core.jacobian import plucker_transform
 
 
@@ -50,15 +53,16 @@ def rnea(
 
     # Root: parent is the fixed world; world v=0, world a = −a_grav (fictitious)
     v0 = S[0] @ dq[:n_f]
-    a0 = -a_grav + motion_cross(v0) @ (S[0] @ dq[:n_f])
+    a0 = -a_grav + motion_cross_apply(v0, S[0] @ dq[:n_f])
     v.append(v0)
     a.append(a0)
 
     for i in range(1, J_n):
         Xi = X_local[i]
         dq_i = dq[i * n_f : (i + 1) * n_f]
-        vi = Xi @ v[parents[i]] + S[i] @ dq_i
-        ai = Xi @ a[parents[i]] + motion_cross(vi) @ (S[i] @ dq_i)
+        si_dq = S[i] @ dq_i
+        vi = Xi @ v[parents[i]] + si_dq
+        ai = Xi @ a[parents[i]] + motion_cross_apply(vi, si_dq)
         v.append(vi)
         a.append(ai)
 
@@ -66,7 +70,7 @@ def rnea(
     f: list[torch.Tensor] = []
     for i in range(J_n):
         Ivi = I_spatial[i] @ v[i]
-        fi = I_spatial[i] @ a[i] + force_cross(v[i]) @ Ivi
+        fi = I_spatial[i] @ a[i] + force_cross_apply(v[i], Ivi)
         f.append(fi)
 
     tau = torch.zeros(J_n * n_f, dtype=dtype, device=device)
