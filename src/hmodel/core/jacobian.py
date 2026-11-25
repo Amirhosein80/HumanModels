@@ -184,47 +184,39 @@ def body_jacobian(
     batch = E.shape[:-3]
     J_n = E.shape[-3]
     n_f = S.shape[-1]
+    N = J_n * n_f
 
-    # ── Step 1: Forward pass — accumulate global Plücker transforms ───────────
-    # global_X[i] = ^i X_0: transforms world-frame spatial vectors to body-i frame.
-    # Root initialised to identity; each child multiplies by its local transform.
-    global_X_list: list[torch.Tensor] = []
-    eye6 = torch.eye(6, dtype=dtype, device=device).expand(*batch, 6, 6)
-    global_X_list.append(eye6.clone())  # joint 0: world frame == body-0 frame for root
+    S_b = S.to(dtype=dtype, device=device)  # (J, 6, n_f)
+
+    # Pre-compute per-joint local Plücker transforms: ^i X_parent.
+    X_local = [
+        plucker_transform(E[..., i, :, :], r[..., i, :])  # (..., 6, 6)
+        for i in range(J_n)
+    ]
+
+    # S padded to full column count: S_padded[i] has S[i] at column block i,
+    # zeros elsewhere.  Shape (..., J, 6, N).
+    S_padded = torch.zeros(J_n, 6, N, dtype=dtype, device=device)
+    for i in range(J_n):
+        S_padded[i, :, i * n_f : (i + 1) * n_f] = S_b[i]
+    S_padded = S_padded.expand(*batch, J_n, 6, N)  # (..., J, 6, N)
+
+    # ── Recursive forward pass (Featherstone Table 5.1) ───────────────────────
+    # Spatial velocity recursion:  v_i = X_local_i @ v_parent + S_i @ dq_i
+    # Differentiating:  J_i = X_local_i @ J_parent + S_i_padded
+    # This is O(J) instead of the O(J^2) all-pairs formulation, since only
+    # ancestor relationships contribute to the body Jacobian.
+    J_list: list[torch.Tensor] = []
+    # Root: no parent, only its own motion subspace at column block 0.
+    J_list.append(S_padded[..., 0, :, :].clone())  # (..., 6, N)
 
     for i in range(1, J_n):
-        X_local_i = plucker_transform(E[..., i, :, :], r[..., i, :])  # (..., 6, 6)
-        global_X_list.append(X_local_i @ global_X_list[parents[i]])
+        j_parent = J_list[parents[i]]  # (..., 6, N)
+        J_i = X_local[i] @ j_parent + S_padded[..., i, :, :]  # (..., 6, N)
+        J_list.append(J_i)
 
-    global_X = torch.stack(global_X_list, dim=-3)  # (..., J, 6, 6)
-
-    # ── Step 2: Analytical inverse of all global transforms ───────────────────
-    inv_global_X = inverse_plucker_transform(global_X)  # (..., J, 6, 6)
-
-    # ── Step 3: Pairwise relative transforms (vectorised, no batch loop) ──────
-    # rel_X[..., i, j, :, :] = ^i X_j = global_X[i] @ inv_global_X[j]
-    rel_X = (
-        global_X[..., :, None, :, :]  # (..., J, 1, 6, 6)
-        @ inv_global_X[..., None, :, :, :]  # (..., 1, J, 6, 6)
-    )  # (..., J, J, 6, 6)
-
-    # ── Step 4: Apply motion subspace matrices ─────────────────────────────────
-    # S: (J, 6, n_f) → broadcast to (..., 1, J, 6, n_f)
-    S_b = S.to(dtype=dtype, device=device)
-    J_cols = rel_X @ S_b[None, :, :, :]  # (..., J_body, J_src, 6, n_f)
-    del rel_X, global_X, inv_global_X, S_b  # free ~300 MB @ B=32, J=24
-
-    # ── Step 5: Zero out non-ancestor columns ─────────────────────────────────
-    anc = ancestor_mask(parents).to(device=device)  # (J, J) bool
-    J_cols = J_cols * anc[..., None, None]  # broadcast over batch + spatial dims
-
-    # ── Step 6: Reshape to (..., J, 6, J*n_f) ────────────────────────────────
-    # Current layout: (..., J_body, J_src, 6, n_f)
-    # Desired layout: (..., J_body, 6, J_src * n_f)
-    J_cols = J_cols.permute(
-        *range(len(batch)), len(batch), len(batch) + 2, len(batch) + 1, len(batch) + 3
-    )  # (..., J_body, 6, J_src, n_f)
-    return J_cols.reshape(*batch, J_n, 6, J_n * n_f)
+    # Stack along the body axis: (..., J, 6, N) = (..., J, 6, J*n_f)
+    return torch.stack(J_list, dim=-3)
 
 
 def body_jacobian_autograd(
