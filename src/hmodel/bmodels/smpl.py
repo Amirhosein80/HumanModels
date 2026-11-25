@@ -1,14 +1,16 @@
 import gc
+import hashlib
+import json
 import os
+from pathlib import Path
 from typing import Optional, Tuple
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 import trimesh
 from scipy.interpolate import LinearNDInterpolator
 
-from ..core.homogeneous import get_transformation_matrix, skewv
+from ..core.homogeneous import skewv
 from ..core.logger import get_logger
 from ..kinematics.kinematics import ForwardKinematics, InverseKinematics
 
@@ -36,7 +38,11 @@ class SMPL:
             logger.error("Invalid gender '%s': must be 'male' or 'female'", gender)
             raise ValueError(f"gender must be 'male' or 'female', got '{gender}'")
 
+        self.gender = gender
+        self._model_path = path
+
         npz_file = os.path.join(path, f"SMPL_{gender.upper()}.npz")
+        self._npz_path = npz_file
         if not os.path.exists(npz_file):
             logger.error("SMPL model file not found: %s", npz_file)
             raise FileNotFoundError(f"SMPL model file not found: {npz_file}")
@@ -63,7 +69,15 @@ class SMPL:
         # forward_kinematics call.
         self._zero_joints_cached, self._zero_vertex_cached = self._compute_zero_state()
 
-        self.mass, self.com, self.inertia = self.physical_properties(res=resolution)
+        # Physical properties with persistent disk cache (avoids the ~10 s
+        # trimesh/scipy voxel computation on every init).
+        cached = self._load_cached_physical_properties(resolution)
+        if cached is not None:
+            self.mass, self.com, self.inertia = cached
+            logger.info("Loaded physical properties from cache")
+        else:
+            self.mass, self.com, self.inertia = self.physical_properties(res=resolution)
+            self._save_cached_physical_properties(resolution)
         gc.collect()  # release trimesh/scipy objects created during physical_properties
         torch.cuda.empty_cache()  # clear fragmented GPU allocator state after heavyweight init
 
@@ -75,6 +89,93 @@ class SMPL:
         zero_joints_position = self.zero_joints - self.zero_joints[:1]  # (J, 3)
         zero_vertex_position = self.v_temp - self.zero_joints[:1]  # (V, 3)
         return zero_joints_position, zero_vertex_position
+
+    # ------------------------------------------------------------------
+    # Physical-properties persistent cache
+    # ------------------------------------------------------------------
+
+    _CACHE_SCHEMA = 1
+
+    def _cache_dir(self) -> Path:
+        """Directory for cached physical properties.
+
+        Stored next to the model files so caches travel with the assets, but
+        falls back to the user cache dir if the models directory is read-only.
+        """
+        model_dir = (
+            Path(self._npz_path).parent if hasattr(self, "_npz_path") else Path(".")
+        )
+        candidates = [model_dir / ".hmodel_cache", Path.home() / ".cache" / "hmodel"]
+        for d in candidates:
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+                # Verify writable
+                probe = d / ".write_test"
+                probe.touch()
+                probe.unlink()
+                return d
+            except OSError:
+                continue
+        # Last resort: current working directory
+        fallback = Path.cwd() / ".hmodel_cache"
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+    def _cache_key(self, resolution: float) -> str:
+        """Stable cache key incorporating gender, asset identity, and config.
+
+        Invalidates when the npz file changes (mtime/size), the gender changes,
+        the resolution changes, or the computation schema changes.
+        """
+        npz_file = os.path.join(self._model_path, f"SMPL_{self.gender.upper()}.npz")
+        st = os.stat(npz_file)
+        h = hashlib.sha256()
+        h.update(str(self._CACHE_SCHEMA).encode())
+        h.update(self.gender.encode())
+        h.update(str(resolution).encode())
+        h.update(str(st.st_mtime_ns).encode())
+        h.update(str(st.st_size).encode())
+        return h.hexdigest()[:16]
+
+    def _cache_path(self, resolution: float) -> Path:
+        return (
+            self._cache_dir()
+            / f"physprops_{self.gender}_{self._cache_key(resolution)}.npz"
+        )
+
+    def _load_cached_physical_properties(
+        self, resolution: float
+    ) -> Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+        """Load cached mass/com/inertia if a valid cache file exists."""
+        path = self._cache_path(resolution)
+        if not path.exists():
+            return None
+        try:
+            with np.load(path) as data:
+                if int(data["schema"]) != self._CACHE_SCHEMA:
+                    return None
+                mass = torch.from_numpy(data["mass"])
+                com = torch.from_numpy(data["com"])
+                inertia = torch.from_numpy(data["inertia"])
+            return mass, com, inertia
+        except Exception:
+            # Corrupt cache — ignore and recompute
+            return None
+
+    def _save_cached_physical_properties(self, resolution: float) -> None:
+        """Persist mass/com/inertia to the cache directory."""
+        path = self._cache_path(resolution)
+        try:
+            np.savez_compressed(
+                path,
+                schema=self._CACHE_SCHEMA,
+                mass=self.mass.numpy(),
+                com=self.com.numpy(),
+                inertia=self.inertia.numpy(),
+            )
+        except OSError:
+            # Cache dir not writable — skip caching, computation is still correct
+            pass
 
     # ------------------------------------------------------------------
     # Public API
@@ -179,42 +280,44 @@ class SMPL:
         )
 
         if return_mesh:
-            global_transformation = get_transformation_matrix(
-                global_rotation, global_position
-            )
-            # (..., J, 4, 4)
+            # LBS: v' = sum_j w_vj * (R_j @ v + t_j)
+            #      = (sum_j w_vj * R_j) @ v + sum_j w_vj * t_j
+            #
+            # G_j = T_global_j @ T_rest_j^{-1} where T_rest_j^{-1} = [I | -zero_joints[j]; 0|1].
+            # So G_j = [R_global_j | p_global_j - R_global_j @ zero_joints[j]; 0|1].
+            # We extract rotation + translation directly, avoiding the (..., J, 4, 4)
+            # relative-transform build and the (..., V, 4, 4) per-vertex 4x4 blend.
+            # G rotation part is just global_rotation; translation part is:
+            #   t_G[j] = p_global[j] - R_global[j] @ zero_joints[j]
+            rot_part = global_rotation  # (..., J, 3, 3)
+            t_part = global_position - torch.matmul(
+                global_rotation, zero_joints.unsqueeze(-1)
+            ).squeeze(
+                -1
+            )  # (..., J, 3)
 
-            # Compute relative transforms G_j = T_j(pose) @ T_j(rest)^{-1}.
-            # T_j(rest) = [I | zero_joints[j]; 0 | 1], so its inverse is [I | -zero_joints[j]; 0 | 1].
-            # This keeps the operation autograd-friendly (no in-place mutation).
-            n_joints = zero_joints.shape[0]
-            eye3 = torch.eye(3, dtype=dtype, device=device)
-            rest_T_inv = get_transformation_matrix(
-                eye3.unsqueeze(0).expand(n_joints, 3, 3),
-                -zero_joints,
-            )  # (J, 4, 4)
-            G = torch.matmul(global_transformation, rest_T_inv)  # (..., J, 4, 4)
-            del global_transformation, rest_T_inv
+            skinning_weights = self.skinning_weights.to(
+                dtype=rot_part.dtype, device=rot_part.device
+            )  # (V, J)
 
-            # LBS: blend joint relative transforms by per-vertex skinning weights.
-            # einsum handles arbitrary batch dims; avoids tensordot + transpose.
-            skinning_weights = self.skinning_weights.to(dtype=G.dtype, device=G.device)
-            vertex_transformation = torch.einsum(
-                "...jkl,vj->...vkl",
-                G,  # (..., J, 4, 4)
-                skinning_weights,  # (V, J)
-            )  # (..., V, 4, 4)
+            # Blend rotations and translations separately (both 3x3 / 3, not 4x4).
+            rot_v = torch.einsum(
+                "...jik,vj->...vik",
+                rot_part,  # (..., J, 3, 3)  j=joint, i,k=matrix
+                skinning_weights,  # (V, J)    v=vertex, j=joint
+            )  # (..., V, 3, 3)
+            trans_v = torch.einsum(
+                "...ji,vj->...vi",
+                t_part,  # (..., J, 3)   j=joint, i=coord
+                skinning_weights,  # (V, J)    v=vertex, j=joint
+            )  # (..., V, 3)
 
-            # Apply to homogeneous vertex coordinates (w=1 for points).
-            # F.pad avoids zero-init + in-place fill, keeping gradient path clean.
-            vertex_vec = F.pad(zero_vertex, (0, 1), value=1.0)  # (V, 4)
-            global_vertex = torch.matmul(
-                vertex_transformation,
-                vertex_vec[..., None],
-            )[
-                ..., :3, 0
-            ]  # (..., V, 3)
-            del vertex_transformation  # (..., V, 4, 4) — up to 1.7 GB @ B=16, free immediately
+            # Apply blended transform to root-centred rest vertices:
+            #   v'[v] = sum_k rot_v[v, i, k] * zero_vertex[v, k] + trans_v[v, i]
+            global_vertex = (
+                torch.einsum("...vik,vk->...vi", rot_v, zero_vertex) + trans_v
+            )  # (..., V, 3)
+            del rot_v, trans_v
 
         else:
             global_vertex = None
