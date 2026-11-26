@@ -21,10 +21,17 @@ class SMPL:
     """SMPL body model: forward kinematics, LBS skinning, and physical properties.
 
     Args:
-        path:       Directory containing ``SMPL_MALE.npz`` / ``SMPL_FEMALE.npz``.
-        gender:     ``"male"`` or ``"female"``.
-        calibration: Calibration pose name (currently only ``"T-pose"``).
-        resolution: Voxel grid resolution (metres) used by :meth:`physical_properties`.
+        path:                  Directory containing ``SMPL_MALE.npz`` /
+                               ``SMPL_FEMALE.npz``.
+        gender:                ``"male"`` or ``"female"``.
+        calibration:           Calibration pose name (currently only ``"T-pose"``).
+        resolution:            Voxel grid resolution (metres) used by
+                               :meth:`physical_properties`.
+        compute_physical_properties: If ``True`` (default), compute mass/CoM/inertia
+                               during ``__init__``.  If ``False``, defer computation
+                               until the attributes are first accessed — useful when
+                               you only need kinematics and want to avoid the
+                               ~10 s trimesh/scipy voxel computation.
     """
 
     def __init__(
@@ -33,6 +40,7 @@ class SMPL:
         gender: str = "male",
         calibration: str = "T-pose",
         resolution: float = 0.02,
+        compute_physical_properties: bool = True,
     ) -> None:
         if gender not in ["male", "female"]:
             logger.error("Invalid gender '%s': must be 'male' or 'female'", gender)
@@ -69,15 +77,25 @@ class SMPL:
         # forward_kinematics call.
         self._zero_joints_cached, self._zero_vertex_cached = self._compute_zero_state()
 
-        # Physical properties with persistent disk cache (avoids the ~10 s
-        # trimesh/scipy voxel computation on every init).
-        cached = self._load_cached_physical_properties(resolution)
-        if cached is not None:
-            self.mass, self.com, self.inertia = cached
-            logger.info("Loaded physical properties from cache")
-        else:
-            self.mass, self.com, self.inertia = self.physical_properties(res=resolution)
-            self._save_cached_physical_properties(resolution)
+        # Physical properties — eagerly computed by default, or lazily on first
+        # attribute access when compute_physical_properties=False.
+        self._compute_physical_properties = compute_physical_properties
+        self._mass: Optional[torch.Tensor] = None
+        self._com: Optional[torch.Tensor] = None
+        self._inertia: Optional[torch.Tensor] = None
+
+        if compute_physical_properties:
+            # Physical properties with persistent disk cache (avoids the ~10 s
+            # trimesh/scipy voxel computation on every init).
+            cached = self._load_cached_physical_properties(resolution)
+            if cached is not None:
+                self._mass, self._com, self._inertia = cached
+                logger.info("Loaded physical properties from cache")
+            else:
+                self._mass, self._com, self._inertia = self.physical_properties(
+                    res=resolution
+                )
+                self._save_cached_physical_properties(resolution)
         gc.collect()  # release trimesh/scipy objects created during physical_properties
         torch.cuda.empty_cache()  # clear fragmented GPU allocator state after heavyweight init
 
@@ -89,6 +107,36 @@ class SMPL:
         zero_joints_position = self.zero_joints - self.zero_joints[:1]  # (J, 3)
         zero_vertex_position = self.v_temp - self.zero_joints[:1]  # (V, 3)
         return zero_joints_position, zero_vertex_position
+
+    # ------------------------------------------------------------------
+    # Lazy physical properties
+    # ------------------------------------------------------------------
+
+    @property
+    def mass(self) -> torch.Tensor:
+        """Per-joint mass in kg.  Computed lazily on first access if deferred."""
+        if self._mass is None:
+            self._mass, self._com, self._inertia = self.physical_properties()
+            self._save_cached_physical_properties(
+                0.02
+            )  # default resolution matches __init__
+        return self._mass
+
+    @property
+    def com(self) -> torch.Tensor:
+        """Per-joint centre-of-mass offset in body frame.  Computed lazily."""
+        if self._com is None:
+            self._mass, self._com, self._inertia = self.physical_properties()
+            self._save_cached_physical_properties(0.02)
+        return self._com
+
+    @property
+    def inertia(self) -> torch.Tensor:
+        """Per-joint inertia tensor at CoM, body frame.  Computed lazily."""
+        if self._inertia is None:
+            self._mass, self._com, self._inertia = self.physical_properties()
+            self._save_cached_physical_properties(0.02)
+        return self._inertia
 
     # ------------------------------------------------------------------
     # Physical-properties persistent cache
@@ -169,9 +217,9 @@ class SMPL:
             np.savez_compressed(
                 path,
                 schema=self._CACHE_SCHEMA,
-                mass=self.mass.numpy(),
-                com=self.com.numpy(),
-                inertia=self.inertia.numpy(),
+                mass=self._mass.numpy(),
+                com=self._com.numpy(),
+                inertia=self._inertia.numpy(),
             )
         except OSError:
             # Cache dir not writable — skip caching, computation is still correct
